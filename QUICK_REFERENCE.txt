@@ -1,0 +1,165 @@
+================================================================================
+PINNACLE OUTREACH AGENT - QUICK REFERENCE CHEAT SHEET
+================================================================================
+
+INSTALLATION COMMANDS
+================================================================================
+
+1. Install Python packages (run once):
+   pip install anthropic google-auth-oauthlib google-auth-httplib2 google-api-python-client gspread python-dotenv
+
+2. Set API key (PowerShell - session only):
+   $env:ANTHROPIC_API_KEY="sk-ant-YOUR_KEY"
+
+3. Set API key permanently (PowerShell - persists):
+   [Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY","sk-ant-YOUR_KEY","User")
+
+RUNNING THE AGENT
+================================================================================
+
+Manual run (for testing):
+   python pinnacle_outreach_agent_utf8_fixed.py
+
+Background run (recommended):
+   Start-Process python -ArgumentList "pinnacle_outreach_agent_utf8_fixed.py" -NoNewWindow
+
+Scheduled run (Task Scheduler - see PINNACLE_README.md for full setup)
+
+FOLDER SETUP
+================================================================================
+
+Required folder structure:
+C:\Users\YOUR_USER\pinnacle-outreach\
+├── pinnacle_outreach_agent_utf8_fixed.py
+├── credentials.json (from Google Cloud Console)
+├── token.json (auto-created on first run)
+└── outreach_log.jsonl (auto-created on first run)
+
+FILES IN THIS PACKAGE
+================================================================================
+
+File                                    Purpose
+-------------------------------------------
+pinnacle_outreach_agent_utf8_fixed.py   Main Python agent (executable)
+PINNACLE_README.md                      Full setup & deployment guide
+QUICK_REFERENCE.txt                     This file - command cheat sheet
+CONFIG_GUIDE.md                         Detailed configuration options
+TROUBLESHOOTING.md                      Common issues & fixes
+EMAIL_EXAMPLES.txt                      Sample generated emails
+CODE_REVIEW_UTF8_FIX.md                 Technical encoding fix explanation
+
+CONFIGURATION SETTINGS
+================================================================================
+
+Edit these in pinnacle_outreach_agent_utf8_fixed.py:
+
+Target Location:
+  TARGET_LOCATION = "Ventura County and Los Angeles County, California"
+
+Company Size:
+  TARGET_COMPANY_SIZE = "micro to small (1-100 employees)"
+
+Email From:
+  amin@pinnaclecontentstudio.com
+
+Email To Website:
+  pinnaclecontentstudio.com
+
+Cycle Timing:
+  research: 30 minutes (between cycles)
+  daily_limit: 5 emails max per day
+  cooldown: 60 minutes (between same company emails)
+
+MONITORING
+================================================================================
+
+Check Gmail drafts:
+  1. Log in to gmail.com
+  2. Account: amin@pinnaclecontentstudio.com
+  3. Check Drafts folder
+
+View activity log:
+  File: outreach_log.jsonl
+  Format: JSON (one entry per line)
+
+TROUBLESHOOTING QUICK FIXES
+================================================================================
+
+Issue: "ANTHROPIC_API_KEY is not set"
+Fix:   $env:ANTHROPIC_API_KEY="sk-ant-YOUR_KEY"
+
+Issue: "credentials.json not found"
+Fix:   Download from Google Cloud Console (see PINNACLE_README.md)
+
+Issue: "Gmail OAuth failed"
+Fix:   Delete token.json and restart
+
+Issue: Garbled text (像った・gh？) in Gmail
+Fix:   Already fixed! This version uses UTF-8 encoding
+
+Issue: Agent stops unexpectedly
+Fix:   Check outreach_log.jsonl for error details
+
+Issue: Gmail drafts not appearing
+Fix:   1. Verify Gmail account is amin@pinnaclecontentstudio.com
+      2. Check Drafts folder (not Inbox)
+      3. Refresh Gmail page
+
+KEY STATS
+================================================================================
+
+Daily Output:         ~240 emails/day (5 per 30-min cycle)
+Cycle Time:           30 minutes
+Target Company Size:  1-100 employees
+Target Location:      Ventura & LA Counties, CA
+Output Type:          Gmail drafts (manual review)
+AI Model:             Claude Opus 4.1
+Encoding:             UTF-8 (no mojibake)
+
+EMAIL CHARACTERISTICS
+================================================================================
+
+Subject Line:
+  - No dates/months/seasons mentioned
+  - Pain-point focused (not "free report")
+  - 50 characters max
+  - Examples: "Help dominate Simi Valley market"
+
+Body:
+  - 120-200 words
+  - Personalized for company
+  - Main CTA: Visit pinnaclecontentstudio.com
+  - Secondary CTA: Schedule 15-min call
+  - Signature included in body
+
+Signature:
+  Amin
+  Founder, Pinnacle Content Studio
+  amin@pinnaclecontentstudio.com
+  pinnaclecontentstudio.com
+
+GOOGLE CLOUD SETUP (One-time)
+================================================================================
+
+1. Go to: https://console.cloud.google.com
+2. Create new project: "Pinnacle Outreach"
+3. Enable: Gmail API
+4. Create OAuth 2.0 Client ID (type: Desktop app)
+5. Download as JSON
+6. Save as: credentials.json (in your pinnacle-outreach folder)
+
+First run will open browser for OAuth authorization.
+
+SUPPORT
+================================================================================
+
+Read these files for more info:
+  PINNACLE_README.md        - Full setup guide
+  CONFIG_GUIDE.md           - Configuration options
+  TROUBLESHOOTING.md        - Common issues
+  EMAIL_EXAMPLES.txt        - Sample output
+  CODE_REVIEW_UTF8_FIX.md   - Technical details
+
+================================================================================
+Ready to deploy! 🚀
+================================================================================
