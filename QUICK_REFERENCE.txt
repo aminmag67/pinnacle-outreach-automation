@@ -17,6 +17,30 @@ INSTALLATION COMMANDS
 RUNNING THE AGENT
 ================================================================================
 
+SAFETY MODES (IMPORTANT)
+================================================================================
+
+SAFE_MODE defaults to true.
+When SAFE_MODE=true, Gmail draft creation is skipped.
+
+--dry-run is a draft-action dry run:
+  - Skips Gmail draft creation only
+  - May still call Anthropic for generation
+
+credentials.json is required only when SAFE_MODE=false and DRY_RUN=false.
+
+Safe default run:
+  python pinnacle_outreach_agent_utf8_fixed.py
+
+Draft-action dry run:
+  python pinnacle_outreach_agent_utf8_fixed.py --dry-run
+
+Enable Gmail draft creation only after explicit approval:
+  python pinnacle_outreach_agent_utf8_fixed.py --safe-mode false
+
+WARNING: Do not use --safe-mode false until credentials are configured and
+you are ready for Gmail drafts to be created.
+
 Manual run (for testing):
    python pinnacle_outreach_agent_utf8_fixed.py
 
