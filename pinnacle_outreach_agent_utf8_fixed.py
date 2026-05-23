@@ -605,6 +605,18 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         company_domain = re.sub(r'[^a-z0-9-]', '', company_name_for_domain.lower().replace(' ', '')) or 'example'
         demo_email = f"contact@{company_domain}.com"
         print(f"  🔎 Planned action: create draft for {demo_email} | SAFE_MODE={safe_mode} | DRY_RUN={dry_run}")
+
+        if safe_mode or dry_run:
+            print("  ---------------------------------------------------------")
+            print(f"  Email preview | Company: {email_data.get('company', company.get('company_name', 'Unknown'))}")
+            print(f"  Planned recipient: {demo_email}")
+            print(f"  Subject: {email_data.get('subject', '')}")
+            print("  Body:")
+            body_lines = str(email_data.get('body', '')).splitlines() or [""]
+            for line in body_lines:
+                print(f"     {line}")
+            print("  ---------------------------------------------------------")
+
         draft_id = None
         if dry_run:
             print("  ⚠️  DRY_RUN enabled: skipping Gmail draft creation")
