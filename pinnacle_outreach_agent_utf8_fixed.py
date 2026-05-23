@@ -390,6 +390,11 @@ Strict output rules:
 Content rules:
 - subject: under 9 words.
 - body: 120 words max.
+- Every email body must include one clear call to action to visit https://www.pinnaclecontentstudio.com.
+- When the prospect appears to have a website or active online presence, offer a free branding report as an optional next step.
+- Do not offer the free branding report when there is no sign the prospect has a website or online presence.
+- Keep the call to action natural and low-pressure.
+- Do not use em dashes or en dashes.
 - Sound human and direct.
 - Do not overpromise.
 - Do not mention AI unless useful.
