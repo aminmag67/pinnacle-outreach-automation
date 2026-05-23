@@ -386,7 +386,6 @@ Rules:
         return None
 
 
-
 def clean_email_text(value: object) -> str:
     """
     Keep normal punctuation and line breaks, but remove control characters
@@ -404,7 +403,8 @@ def clean_email_text(value: object) -> str:
         if char in allowed_controls or ord(char) >= 32
     ).strip()
 
-def create_gmail_draft(to_email: str, email_data: dict, 
+
+def create_gmail_draft(to_email: str, email_data: dict,
                       from_email: str = None) -> Optional[str]:
     """
     Create a REAL Gmail draft using OAuth2 with amin@pinnaclecontentstudio.com
@@ -415,14 +415,14 @@ def create_gmail_draft(to_email: str, email_data: dict,
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
-        
+
         SCOPES = ['https://www.googleapis.com/auth/gmail.compose']
-        
+
         # Load or create credentials
         creds = None
         if os.path.exists('token.json'):
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        
+
         # If no valid credentials, get new ones
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -436,18 +436,18 @@ def create_gmail_draft(to_email: str, email_data: dict,
                     print("   2. Download as JSON")
                     print("   3. Save as 'credentials.json' in this folder")
                     return None
-                
+
                 flow = InstalledAppFlow.from_client_secrets_file(
                     'credentials.json', SCOPES)
                 creds = flow.run_local_server(port=0)
-            
+
             # Save the credentials for next time
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
-        
+
         # Create Gmail service
         service = build('gmail', 'v1', credentials=creds)
-        
+
         # Build the email message with UTF-8 encoding.
         # Do not call set_payload() after MIME creation. That can corrupt
         # non-ASCII characters and make Gmail show mojibake/special symbols.
@@ -476,10 +476,10 @@ pinnaclecontent.studio"""
             userId='me',
             body={'message': {'raw': raw}}
         ).execute()
-        
+
         print(f"  ✓ Gmail draft created: {to_email}")
         return draft['id']
-        
+
     except Exception as e:
         print(f"  ✗ Error creating Gmail draft: {e}")
         return None
@@ -503,14 +503,14 @@ def log_to_file(email_data: dict) -> bool:
             "status": "draft_created",
             "body_preview": email_data['body'][:100] + "...",
         }
-        
+
         # Append to log file
         log_file = "outreach_log.jsonl"
         with open(log_file, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"  ✗ Error logging: {e}")
         return False
@@ -520,7 +520,7 @@ def log_to_file(email_data: dict) -> bool:
 # MAIN AGENT LOOP
 # ============================================================================
 
-def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: bool = False):
+def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: bool = False, once: bool = False):
     """
     Execute one complete outreach cycle:
     1. Generate company targets
@@ -532,28 +532,32 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
     print("\n" + "="*70)
     print(f"🚀 PINNACLE OUTREACH CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*70)
-    
+
     # Step 1: Generate targets
     print(f"\n📋 Generating {num_companies} company targets...")
     companies = generate_company_targets(num_companies)
     print(f"✓ Generated {len(companies)} targets")
-    
-    drafts_created = 0
-    
+
+    real_gmail_drafts_created = 0
+    safe_mode_skipped = 0
+    dry_run_skipped = 0
+    failed_email_generations = 0
+
     for i, company in enumerate(companies, 1):
         print(f"\n--- Company {i}/{len(companies)}: {company.get('company_name', 'Unknown')} ---")
-        
+
         # Step 2: Research
         print("  🔍 Researching...")
         company = research_company(company)
-        
+
         # Step 3: Generate email
         print("  ✍️  Generating email...")
         email_data = generate_outreach_email(company)
         if not email_data:
             print("  ✗ Failed to generate email, skipping")
+            failed_email_generations += 1
             continue
-        
+
         # Step 4: Create Gmail draft
         print("  📧 Preparing Gmail draft action...")
         # Generate a realistic demo email address
@@ -564,30 +568,45 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         draft_id = None
         if dry_run:
             print("  ⚠️  DRY_RUN enabled: skipping Gmail draft creation")
-            draft_id = f"dry-run-{i}"
+            dry_run_skipped += 1
         elif safe_mode:
             print("  ⚠️  SAFE_MODE enabled: skipping Gmail draft creation")
-            draft_id = f"safe-mode-{i}"
+            safe_mode_skipped += 1
         else:
             draft_id = create_gmail_draft(demo_email, email_data)
-        
+
         # Step 5: Log
+        # Note: only real Gmail drafts are logged to the tracking file.
+        # Safe-mode/dry-run skipped actions are counted in summary metrics.
         if draft_id:
             print("  📊 Logging to tracking file...")
             log_to_file(email_data)
-            drafts_created += 1
-        
+            real_gmail_drafts_created += 1
+
         # Small delay between emails
         if i < len(companies):
             time.sleep(2)
-    
+
     print(f"\n{'='*70}")
-    print(f"✓ CYCLE COMPLETE: {drafts_created} drafts created")
-    print(f"  Check your Gmail drafts folder: amin@pinnaclecontentstudio.com")
-    print(f"  Next cycle in {CAMPAIGN_INTERVALS['research']} minutes")
+    print("✓ CYCLE COMPLETE")
+    print(f"  Real Gmail drafts created: {real_gmail_drafts_created}")
+    print(f"  Draft actions skipped (SAFE_MODE): {safe_mode_skipped}")
+    print(f"  Draft actions skipped (DRY_RUN): {dry_run_skipped}")
+    print(f"  Failed email generations: {failed_email_generations}")
+    if real_gmail_drafts_created > 0:
+        print(f"  Check your Gmail drafts folder: amin@pinnaclecontentstudio.com")
+    if once:
+        print("  One-cycle run complete. No next cycle scheduled.")
+    else:
+        print(f"  Next cycle in {CAMPAIGN_INTERVALS['research']} minutes")
     print(f"{'='*70}\n")
-    
-    return drafts_created
+
+    return {
+        "real_gmail_drafts_created": real_gmail_drafts_created,
+        "safe_mode_skipped": safe_mode_skipped,
+        "dry_run_skipped": dry_run_skipped,
+        "failed_email_generations": failed_email_generations,
+    }
 
 
 def main():
@@ -599,17 +618,18 @@ def main():
     ║  PINNACLE CONTENT STUDIO - AUTONOMOUS OUTREACH AGENT             ║
     ║  Status: ACTIVE                                                   ║
     ║  Mode: Continuous Operation                                       ║
-    ║  Output: Real Gmail Drafts                                        ║
+    ║  Output: Controlled by SAFE_MODE / DRY_RUN                        ║
     ║  Email: amin@pinnaclecontentstudio.com                           ║
     ╚═══════════════════════════════════════════════════════════════════╝
     """)
-    
+
     parser = argparse.ArgumentParser(description="Pinnacle Outreach Agent")
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Draft-action dry run: skips Gmail draft creation only; may still call Anthropic API",
     )
+    parser.add_argument("--once", action="store_true", help="Run exactly one outreach cycle and exit")
     parser.add_argument("--safe-mode", choices=["true", "false"], default=None, help="Override SAFE_MODE env var")
     args = parser.parse_args()
 
@@ -621,26 +641,33 @@ def main():
         dry_run = True
 
     print(f"Startup config: SAFE_MODE={safe_mode} | DRY_RUN={dry_run}")
+    print("Output mode:")
+    print("- Gmail draft creation skipped when SAFE_MODE=true or DRY_RUN=true")
+    print("- Real Gmail drafts only when SAFE_MODE=false and DRY_RUN=false")
     if dry_run:
         print("Mode note: --dry-run is a draft-action dry run. Gmail draft creation is skipped, but Anthropic API calls may still occur during generation.")
     validate_startup_requirements(safe_mode=safe_mode, dry_run=dry_run)
 
     cycle_count = 0
-    
+
     try:
         while True:
             cycle_count += 1
             print(f"\n>>> Cycle #{cycle_count}")
-            
+
             # Run outreach cycle
-            run_outreach_cycle(num_companies=5, safe_mode=safe_mode, dry_run=dry_run)
-            
+            run_outreach_cycle(num_companies=5, safe_mode=safe_mode, dry_run=dry_run, once=args.once)
+
+            if args.once:
+                print("\n⏹️  --once enabled: completed one cycle, exiting.")
+                break
+
             # Wait for next cycle
             print(f"⏳ Sleeping for {CAMPAIGN_INTERVALS['research']} minutes...")
             print(f"   (Press Ctrl+C to stop)\n")
-            
+
             time.sleep(CAMPAIGN_INTERVALS['research'] * 60)
-            
+
     except KeyboardInterrupt:
         print("\n\n⏹️  Agent stopped by user")
         print(f"Total cycles completed: {cycle_count}")
