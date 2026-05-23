@@ -14,6 +14,7 @@ import json
 import random
 import base64
 import re
+import argparse
 from datetime import datetime, timedelta
 from typing import Optional, Any
 from email.message import EmailMessage
@@ -27,6 +28,8 @@ from email.message import EmailMessage
 # In PowerShell, set it before running:
 #   $env:ANTHROPIC_API_KEY="your_api_key_here"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+SAFE_MODE_DEFAULT = os.environ.get("SAFE_MODE", "true").strip().lower()
+DRY_RUN_DEFAULT = os.environ.get("DRY_RUN", "false").strip().lower()
 
 # LOCAL TARGETING - VENTURA & LA COUNTIES
 TARGET_LOCATION = "Ventura County and Los Angeles County, California"
@@ -100,6 +103,32 @@ CAMPAIGN_INTERVALS = {
     "daily_limit": 5,  # max emails per day
     "cooldown": 60   # minutes between emails to same company
 }
+
+
+def _parse_bool(value: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def validate_startup_requirements(*, safe_mode: bool, dry_run: bool) -> None:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("Missing ANTHROPIC_API_KEY. Set it before running the agent.")
+
+    if safe_mode or dry_run:
+        print("Startup check: skipping Gmail credentials validation because no Gmail drafts will be created (SAFE_MODE or DRY_RUN is enabled).")
+        return
+
+    if not os.path.exists("credentials.json"):
+        raise RuntimeError(
+            "Missing credentials.json. Gmail OAuth credentials are required when SAFE_MODE=false and DRY_RUN=false."
+        )
 
 
 # ============================================================================
@@ -491,7 +520,7 @@ def log_to_file(email_data: dict) -> bool:
 # MAIN AGENT LOOP
 # ============================================================================
 
-def run_outreach_cycle(num_companies: int = 5):
+def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: bool = False):
     """
     Execute one complete outreach cycle:
     1. Generate company targets
@@ -526,12 +555,21 @@ def run_outreach_cycle(num_companies: int = 5):
             continue
         
         # Step 4: Create Gmail draft
-        print("  📧 Creating Gmail draft...")
+        print("  📧 Preparing Gmail draft action...")
         # Generate a realistic demo email address
         company_name_for_domain = company.get('company_name', 'example')
         company_domain = re.sub(r'[^a-z0-9-]', '', company_name_for_domain.lower().replace(' ', '')) or 'example'
         demo_email = f"contact@{company_domain}.com"
-        draft_id = create_gmail_draft(demo_email, email_data)
+        print(f"  🔎 Planned action: create draft for {demo_email} | SAFE_MODE={safe_mode} | DRY_RUN={dry_run}")
+        draft_id = None
+        if dry_run:
+            print("  ⚠️  DRY_RUN enabled: skipping Gmail draft creation")
+            draft_id = f"dry-run-{i}"
+        elif safe_mode:
+            print("  ⚠️  SAFE_MODE enabled: skipping Gmail draft creation")
+            draft_id = f"safe-mode-{i}"
+        else:
+            draft_id = create_gmail_draft(demo_email, email_data)
         
         # Step 5: Log
         if draft_id:
@@ -566,6 +604,27 @@ def main():
     ╚═══════════════════════════════════════════════════════════════════╝
     """)
     
+    parser = argparse.ArgumentParser(description="Pinnacle Outreach Agent")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Draft-action dry run: skips Gmail draft creation only; may still call Anthropic API",
+    )
+    parser.add_argument("--safe-mode", choices=["true", "false"], default=None, help="Override SAFE_MODE env var")
+    args = parser.parse_args()
+
+    safe_mode = _parse_bool(SAFE_MODE_DEFAULT, default=True)
+    dry_run = _parse_bool(DRY_RUN_DEFAULT, default=False)
+    if args.safe_mode is not None:
+        safe_mode = _parse_bool(args.safe_mode, default=True)
+    if args.dry_run:
+        dry_run = True
+
+    print(f"Startup config: SAFE_MODE={safe_mode} | DRY_RUN={dry_run}")
+    if dry_run:
+        print("Mode note: --dry-run is a draft-action dry run. Gmail draft creation is skipped, but Anthropic API calls may still occur during generation.")
+    validate_startup_requirements(safe_mode=safe_mode, dry_run=dry_run)
+
     cycle_count = 0
     
     try:
@@ -574,7 +633,7 @@ def main():
             print(f"\n>>> Cycle #{cycle_count}")
             
             # Run outreach cycle
-            run_outreach_cycle(num_companies=5)
+            run_outreach_cycle(num_companies=5, safe_mode=safe_mode, dry_run=dry_run)
             
             # Wait for next cycle
             print(f"⏳ Sleeping for {CAMPAIGN_INTERVALS['research']} minutes...")

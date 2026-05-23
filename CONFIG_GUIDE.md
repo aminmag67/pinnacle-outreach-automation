@@ -137,6 +137,25 @@ CAMPAIGN_INTERVALS = {
 
 ---
 
+
+---
+
+## SAFETY MODE & DRY RUN
+
+- `SAFE_MODE` defaults to `true`.
+- When `SAFE_MODE=true`, Gmail draft creation is skipped.
+- `--dry-run` is a draft-action dry run: it skips Gmail draft creation only, but may still call Anthropic for generation.
+- `credentials.json` is required only when `SAFE_MODE=false` and `DRY_RUN=false`.
+
+Commands:
+
+    python pinnacle_outreach_agent_utf8_fixed.py
+    python pinnacle_outreach_agent_utf8_fixed.py --dry-run
+    python pinnacle_outreach_agent_utf8_fixed.py --safe-mode false
+
+Do not use `--safe-mode false` until credentials are configured and you are ready for Gmail drafts to be created.
+
+---
 ## EMAIL CONFIGURATION
 
 ### Sender Email
@@ -448,3 +467,4 @@ Most common changes:
 5. **Company count**: `num_companies=10`
 
 Make one change, test, then adjust!
+
