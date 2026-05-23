@@ -242,6 +242,37 @@ def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
         return None
 
 
+def _extract_claude_json_response(text: str) -> Optional[dict[str, Any]]:
+    """
+    Robustly extract JSON from Claude output by trying:
+    1) Full-response JSON parse
+    2) JSON fenced code blocks
+    3) First JSON object within surrounding prose
+    """
+    if not text:
+        return None
+
+    # 1) Direct parse of full response
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Parse ```json ... ``` fenced blocks
+    fenced_matches = re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    for candidate in fenced_matches:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+
+    # 3) Fallback to first JSON object in prose
+    return _extract_json_object(text)
+
 def research_company(company: dict) -> dict:
     """
     Add lightweight research context to a generated company target.
@@ -367,8 +398,10 @@ Rules:
             messages=[{"role": "user", "content": prompt}],
         )
         response_text = message.content[0].text
-        email_data = _extract_json_object(response_text)
+        email_data = _extract_claude_json_response(response_text)
         if not email_data:
+            preview = response_text[:200].replace("\n", " ")
+            print(f"  ??  Claude response preview (first 200 chars): {preview}")
             raise ValueError("Claude did not return valid JSON.")
 
         required_fields = ["subject", "body"]
