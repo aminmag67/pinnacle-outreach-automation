@@ -374,16 +374,22 @@ Prospect:
 
 Pinnacle Content Studio helps small and mid-size local businesses create practical marketing content, including social posts, email copy, landing page copy, lead magnets, training content, and reusable content systems.
 
-Return only valid JSON:
+Return only this JSON object schema:
 {{
-  "company": "{company_name}",
-  "contact_role": "{contact_role}",
-  "industry": "{industry}",
-  "subject": "email subject under 9 words",
-  "body": "email body, 120 words max"
+  "subject": "string",
+  "body": "string"
 }}
 
-Rules:
+Strict output rules:
+- Return only valid JSON.
+- Do not include markdown.
+- Do not include ```json fences.
+- Do not include any explanation text before or after JSON.
+- Escape newlines inside JSON strings if needed.
+
+Content rules:
+- subject: under 9 words.
+- body: 120 words max.
 - Sound human and direct.
 - Do not overpromise.
 - Do not mention AI unless useful.
@@ -405,9 +411,10 @@ Rules:
             raise ValueError("Claude did not return valid JSON.")
 
         required_fields = ["subject", "body"]
-        for field in required_fields:
-            if not email_data.get(field):
-                raise ValueError(f"Email JSON missing required field: {field}")
+        missing_fields = [field for field in required_fields if not email_data.get(field)]
+        if missing_fields:
+            print(f"  ??  Missing required email fields: {', '.join(missing_fields)}")
+            raise ValueError(f"Email JSON missing required fields: {', '.join(missing_fields)}")
 
         email_data.setdefault("company", company_name)
         email_data.setdefault("contact_role", contact_role)
