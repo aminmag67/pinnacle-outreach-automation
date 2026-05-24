@@ -372,7 +372,7 @@ Prospect:
 - Personalization angle: {research.get("personalization_angle", "")}
 - Suggested offer: {research.get("suggested_offer", "")}
 
-Pinnacle Content Studio helps small and mid-size local businesses create practical marketing content, including social posts, email copy, landing page copy, lead magnets, training content, and reusable content systems.
+You are generating outreach emails for Pinnacle Content Studio, a creative agency.
 
 Return only this JSON object schema:
 {{
@@ -383,23 +383,75 @@ Return only this JSON object schema:
 Strict output rules:
 - Return only valid JSON.
 - Do not include markdown.
-- Do not include ```json fences.
-- Do not include any explanation text before or after JSON.
+- Do not include code fences.
+- Do not include explanation text before or after JSON.
 - Escape newlines inside JSON strings if needed.
 
-Content rules:
-- subject: under 9 words.
-- body: 120 words max.
-- Every email body must include one clear call to action to visit https://www.pinnaclecontentstudio.com.
-- When the prospect appears to have a website or active online presence, offer a free branding report as an optional next step.
-- Do not offer the free branding report when there is no sign the prospect has a website or online presence.
-- Keep the call to action natural and low-pressure.
-- Do not use em dashes or en dashes.
-- Sound human and direct.
-- Do not overpromise.
-- Do not mention AI unless useful.
-- Ask for a quick call or permission to send a few ideas.
+Tone and voice:
+- Conversational, direct, and human.
+- Do not sound salesy.
+- Use specific observations only.
+- Do not use generic phrases like "we help", "streamline", or "unlock potential".
+- Show one clear problem and one clear solution.
+- End on curiosity, not demand.
+
+Email structure:
+1. Hook: one specific observation about their business or challenge.
+2. Context: why this matters right now in their industry.
+3. Your solution: one specific deliverable with a concrete name and timeline.
+4. Outcome: what they get, such as saved time, faster leasing, better referrals, stronger authority, or better donor engagement.
+5. CTA: one ask only.
+
+CTA rules:
+- Use either a 15 minute call or a Free Brand View Report.
+- Do not use both in the same email.
+- If the outreach feels direct and specific, ask for a 15 minute call.
+- If engagement is uncertain and the prospect appears to have a website or active online presence, offer a Free Brand View Report.
+- Do not say "learn more".
+- Do not use vague link CTA language.
+- If using the website, use this direct CTA: Visit https://www.pinnaclecontentstudio.com.
+- Avoid "free branding report" unless the report is the primary CTA.
+
+Critical writing rules:
+- Do not use hyphens.
+- Do not use em dashes.
+- Do not use en dashes.
+- Do not mention AI unless it is specifically relevant to the use case.
+- Do not mention multiple services.
+- Pick one service or deliverable for this email.
+- Keep the body short.
+- Use short paragraphs with 2 to 3 sentences max.
+- No bullet points in the email body.
 - Do not include a signature. The script adds one.
+
+Company specific guidance:
+- For dental practices, focus on patient education and team time savings.
+- For property management, focus on leasing velocity and competitive advantage.
+- For fitness and wellness, focus on client retention and referral generation.
+- For professional services, focus on authority positioning and lead qualification.
+- For non profits, focus on donor engagement and mission storytelling.
+
+Deliverable examples:
+- 3 professional walkthrough videos with 48 hour turnaround.
+- 40 pre made educational posts customized for their locations.
+- A one page Free Brand View Report reviewing website clarity, message consistency, and local trust signals.
+- A 30 day patient education content plan.
+- A donor story content package.
+
+Subject rules:
+- Under 9 words.
+- No hyphens.
+- No em dashes.
+- No en dashes.
+
+Body rules:
+- 120 words max.
+- No hyphens.
+- No em dashes.
+- No en dashes.
+- No bullet points.
+- No generic claims.
+- No laundry list of services.
 """
 
     try:
