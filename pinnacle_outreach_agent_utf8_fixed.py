@@ -273,6 +273,43 @@ def _extract_claude_json_response(text: str) -> Optional[dict[str, Any]]:
     # 3) Fallback to first JSON object in prose
     return _extract_json_object(text)
 
+
+def _validate_generated_email_quality(email_data: dict) -> list[str]:
+    """
+    Validate generated outreach email content before any draft action.
+    Returns a list of quality issues. Empty list means the email passed.
+    """
+    subject = str(email_data.get("subject", ""))
+    body = str(email_data.get("body", ""))
+    combined = f"{subject}\n{body}"
+    combined_lower = combined.lower()
+
+    issues = []
+
+    banned_chars = {
+        "-": "hyphen",
+        "\u2013": "en dash",
+        "\u2014": "em dash",
+    }
+
+    for char, label in banned_chars.items():
+        if char in combined:
+            issues.append(f"contains {label}")
+
+    banned_phrases = [
+        "we help",
+        "streamline",
+        "unlock potential",
+    ]
+
+    for phrase in banned_phrases:
+        if phrase in combined_lower:
+            issues.append(f"contains banned phrase: {phrase}")
+
+    return issues
+
+
+
 def research_company(company: dict) -> dict:
     """
     Add lightweight research context to a generated company target.
@@ -472,6 +509,11 @@ Body rules:
         if missing_fields:
             print(f"  ??  Missing required email fields: {', '.join(missing_fields)}")
             raise ValueError(f"Email JSON missing required fields: {', '.join(missing_fields)}")
+
+        quality_issues = _validate_generated_email_quality(email_data)
+        if quality_issues:
+            print(f"  ??  Email quality validation failed: {', '.join(quality_issues)}")
+            return None
 
         email_data.setdefault("company", company_name)
         email_data.setdefault("contact_role", contact_role)
