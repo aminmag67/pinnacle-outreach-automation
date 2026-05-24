@@ -599,7 +599,7 @@ def create_gmail_draft(to_email: str, email_data: dict,
 Amin
 Founder, Pinnacle Content Studio
 amin@pinnaclecontentstudio.com
-pinnaclecontent.studio"""
+pinnaclecontentstudio.com"""
 
         full_body = body + signature
 
