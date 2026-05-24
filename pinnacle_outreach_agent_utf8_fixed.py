@@ -782,6 +782,12 @@ def main():
     )
     parser.add_argument("--once", action="store_true", help="Run exactly one outreach cycle and exit")
     parser.add_argument("--safe-mode", choices=["true", "false"], default=None, help="Override SAFE_MODE env var")
+    parser.add_argument(
+        "--num-companies",
+        type=int,
+        default=5,
+        help="Number of companies to process in this cycle. Use 1 for a controlled Gmail draft test.",
+    )
     args = parser.parse_args()
 
     safe_mode = _parse_bool(SAFE_MODE_DEFAULT, default=True)
@@ -807,7 +813,7 @@ def main():
             print(f"\n>>> Cycle #{cycle_count}")
 
             # Run outreach cycle
-            run_outreach_cycle(num_companies=5, safe_mode=safe_mode, dry_run=dry_run, once=args.once)
+            run_outreach_cycle(num_companies=args.num_companies, safe_mode=safe_mode, dry_run=dry_run, once=args.once)
 
             if args.once:
                 print("\n⏹️  --once enabled: completed one cycle, exiting.")
