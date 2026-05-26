@@ -1,46 +1,126 @@
-try:
-    with sqlite3.connect(DB_FILE) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        missing = sorted(REQUIRED_TABLES - tables)
-        if missing:
-            print("Error: Missing required table(s): " + ", ".join(missing))
-            return 1
+﻿#!/usr/bin/env python3
+import os
+import sqlite3
+import sys
 
-        print("CRM Follow-up Report")
-        print("=" * 80)
-        for status in REPORT_STATUSES:
-            leads = fetch_leads_by_status(conn, status)
-            print(f"\nStatus: {status} ({len(leads)} lead(s))")
-            print("-" * 80)
-            if not leads:
-                print("  (none)")
-                continue
+DB_FILE = "pinnacle_crm.db"
 
-            for lead in leads:
-                lead_id, company_name, contact_email, lead_status, created_at, updated_at, last_contact_at, next_follow_up_at = lead
-                print(
-                    f"  Lead {lead_id} | {company_name} | email={contact_email or '(none)'} | status={lead_status}"
-                )
-                print(
-                    f"    created_at={created_at} | updated_at={updated_at} | last_contact_at={last_contact_at or '(none)'} | next_follow_up_at={next_follow_up_at or '(none)'}"
-                )
+STATUSES_TO_REPORT = [
+    "New lead",
+    "Draft created",
+    "Follow up needed",
+    "Responded",
+    "Call booked",
+]
 
-                activities = fetch_latest_activities(conn, lead_id, limit=3)
-                if activities:
-                    print("    Latest activities:")
-                    for act_id, activity_type, notes, act_created_at in activities:
-                        print(
-                            f"      - activity_id={act_id} | type={activity_type} | notes={notes or '(none)'} | created_at={act_created_at}"
-                        )
-                else:
-                    print("    Latest activities: (none)")
-except sqlite3.Error as exc:
-    print(f"Error: Unable to read database '{DB_FILE}': {exc}")
-    return 1
+REQUIRED_TABLES = ["leads", "activities"]
 
-return 0
+
+def table_exists(conn, table_name):
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def get_latest_activities(conn, lead_id, limit=3):
+    return conn.execute(
+        """
+        SELECT activity_type, notes, created_at
+        FROM activities
+        WHERE lead_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (lead_id, limit),
+    ).fetchall()
+
+
+def print_lead(conn, lead):
+    (
+        lead_id,
+        company_name,
+        contact_email,
+        status,
+        created_at,
+        updated_at,
+        last_contact_at,
+        next_follow_up_at,
+    ) = lead
+
+    print(f"  Lead ID: {lead_id}")
+    print(f"  Company: {company_name}")
+    print(f"  Contact email: {contact_email or '(none)'}")
+    print(f"  Status: {status}")
+    print(f"  Created: {created_at}")
+    print(f"  Updated: {updated_at}")
+    print(f"  Last contact: {last_contact_at or '(none)'}")
+    print(f"  Next follow-up: {next_follow_up_at or '(none)'}")
+
+    activities = get_latest_activities(conn, lead_id)
+    print("  Latest activities:")
+
+    if not activities:
+        print("    (none)")
+    else:
+        for activity_type, notes, created_at in activities:
+            notes_text = f" | {notes}" if notes else ""
+            print(f"    - {created_at}: {activity_type}{notes_text}")
+
+    print()
+
+
+def main():
+    if not os.path.exists(DB_FILE):
+        print(f"Error: Database file '{DB_FILE}' does not exist.")
+        sys.exit(1)
+
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            missing_tables = [table for table in REQUIRED_TABLES if not table_exists(conn, table)]
+            if missing_tables:
+                print(f"Error: Missing required CRM tables: {', '.join(missing_tables)}")
+                sys.exit(1)
+
+            print("CRM Follow-up Report")
+            print("====================")
+            print()
+
+            for status in STATUSES_TO_REPORT:
+                leads = conn.execute(
+                    """
+                    SELECT
+                        id,
+                        company_name,
+                        contact_email,
+                        status,
+                        created_at,
+                        updated_at,
+                        last_contact_at,
+                        next_follow_up_at
+                    FROM leads
+                    WHERE status = ?
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (status,),
+                ).fetchall()
+
+                print(f"{status}")
+                print("-" * len(status))
+
+                if not leads:
+                    print("  (none)")
+                    print()
+                    continue
+
+                for lead in leads:
+                    print_lead(conn, lead)
+
+    except sqlite3.Error as exc:
+        print(f"Error: Could not read CRM data: {exc}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
