@@ -11,3 +11,4 @@ logs/
 *.log
 outreach_log.jsonl
 pinnacle_crm.db
+crm_exports/
