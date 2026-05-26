@@ -15,6 +15,7 @@ import random
 import base64
 import re
 import argparse
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional, Any
 from email.message import EmailMessage
@@ -103,6 +104,162 @@ CAMPAIGN_INTERVALS = {
     "daily_limit": 5,  # max emails per day
     "cooldown": 60   # minutes between emails to same company
 }
+
+
+
+CRM_DB_FILE = "pinnacle_crm.db"
+CRM_ALLOWED_STATUSES = {
+    "New lead",
+    "Draft created",
+    "Email sent",
+    "Responded",
+    "Follow up needed",
+    "Call booked",
+    "Meeting completed",
+    "Proposal sent",
+    "Won",
+    "Lost",
+    "Do not contact",
+}
+
+
+def init_crm() -> None:
+    with sqlite3.connect(CRM_DB_FILE) as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL UNIQUE,
+                industry TEXT,
+                location TEXT,
+                website TEXT,
+                contact_email TEXT,
+                contact_role TEXT,
+                fit_score INTEGER,
+                fit_reason TEXT,
+                status TEXT NOT NULL DEFAULT 'New lead',
+                source TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_contact_at TEXT,
+                next_follow_up_at TEXT,
+                notes TEXT
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS activities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                activity_type TEXT NOT NULL,
+                notes TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (lead_id) REFERENCES leads(id)
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                gmail_draft_id TEXT NOT NULL,
+                recipient_email TEXT,
+                subject TEXT,
+                body TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (lead_id) REFERENCES leads(id)
+            )"""
+        )
+
+
+def upsert_lead(company: dict, email_data: dict | None = None) -> int:
+    now = datetime.now().isoformat()
+    email_data = email_data or {}
+    company_name = company.get("company_name") or email_data.get("company")
+    if not company_name:
+        raise ValueError("company_name is required for CRM lead upsert")
+    candidate_email = email_data.get("recipient_email") or company.get("contact_email")
+    with sqlite3.connect(CRM_DB_FILE) as conn:
+        existing = conn.execute(
+            "SELECT id, contact_email FROM leads WHERE company_name = ?",
+            (company_name,),
+        ).fetchone()
+        fit_score = company.get("fit_score")
+        if isinstance(fit_score, str) and fit_score.isdigit():
+            fit_score = int(fit_score)
+        if existing:
+            lead_id, existing_email = existing
+            conn.execute(
+                """UPDATE leads
+                   SET industry=?, location=?, website=?, contact_email=?, contact_role=?,
+                       fit_score=?, fit_reason=?, source=?, updated_at=?, notes=?
+                   WHERE id=?""",
+                (
+                    company.get("industry"),
+                    company.get("location"),
+                    company.get("website"),
+                    candidate_email or existing_email,
+                    company.get("contact_role") or email_data.get("contact_role"),
+                    fit_score if isinstance(fit_score, int) else None,
+                    company.get("fit_reason") or company.get("pain_point"),
+                    company.get("source", "outreach_cycle"),
+                    now,
+                    company.get("notes"),
+                    lead_id,
+                ),
+            )
+            return lead_id
+        conn.execute(
+            """INSERT INTO leads (
+                   company_name, industry, location, website, contact_email, contact_role,
+                   fit_score, fit_reason, status, source, created_at, updated_at,
+                   last_contact_at, next_follow_up_at, notes
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                company_name,
+                company.get("industry"),
+                company.get("location"),
+                company.get("website"),
+                candidate_email,
+                company.get("contact_role") or email_data.get("contact_role"),
+                fit_score if isinstance(fit_score, int) else None,
+                company.get("fit_reason") or company.get("pain_point"),
+                "New lead",
+                company.get("source", "outreach_cycle"),
+                now,
+                now,
+                None,
+                None,
+                company.get("notes"),
+            ),
+        )
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def record_activity(lead_id: int, activity_type: str, notes: str = "", metadata: dict | None = None) -> None:
+    with sqlite3.connect(CRM_DB_FILE) as conn:
+        conn.execute(
+            """INSERT INTO activities (lead_id, activity_type, notes, metadata_json, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (lead_id, activity_type, notes, json.dumps(metadata or {}), datetime.now().isoformat()),
+        )
+
+
+def update_lead_status(lead_id: int, status: str) -> None:
+    if status not in CRM_ALLOWED_STATUSES:
+        raise ValueError(f"Unsupported lead status: {status}")
+    with sqlite3.connect(CRM_DB_FILE) as conn:
+        conn.execute(
+            "UPDATE leads SET status=?, updated_at=? WHERE id=?",
+            (status, datetime.now().isoformat(), lead_id),
+        )
+
+
+def save_gmail_draft_record(lead_id: int, gmail_draft_id: str, recipient_email: str, subject: str, body: str) -> None:
+    with sqlite3.connect(CRM_DB_FILE) as conn:
+        conn.execute(
+            """INSERT INTO drafts (lead_id, gmail_draft_id, recipient_email, subject, body, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (lead_id, gmail_draft_id, recipient_email, subject, body, datetime.now().isoformat()),
+        )
 
 
 def _parse_bool(value: str, default: bool = False) -> bool:
@@ -671,6 +828,7 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
     print("\n" + "="*70)
     print(f"🚀 PINNACLE OUTREACH CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*70)
+    init_crm()
 
     # Step 1: Generate targets
     print(f"\n📋 Generating {num_companies} company targets...")
@@ -688,6 +846,7 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         # Step 2: Research
         print("  🔍 Researching...")
         company = research_company(company)
+        lead_id = upsert_lead(company)
 
         # Step 3: Generate email
         print("  ✍️  Generating email...")
@@ -696,6 +855,7 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
             print("  ✗ Failed to generate email, skipping")
             failed_email_generations += 1
             continue
+        record_activity(lead_id, "Email generated")
 
         # Step 4: Create Gmail draft
         print("  📧 Preparing Gmail draft action...")
@@ -704,6 +864,8 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         company_domain = re.sub(r'[^a-z0-9-]', '', company_name_for_domain.lower().replace(' ', '')) or 'example'
         demo_email = f"contact@{company_domain}.com"
         print(f"  🔎 Planned action: create draft for {demo_email} | SAFE_MODE={safe_mode} | DRY_RUN={dry_run}")
+        email_data["recipient_email"] = demo_email
+        lead_id = upsert_lead(company, email_data=email_data)
 
         if safe_mode or dry_run:
             print("  ---------------------------------------------------------")
@@ -720,9 +882,11 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         if dry_run:
             print("  ⚠️  DRY_RUN enabled: skipping Gmail draft creation")
             dry_run_skipped += 1
+            record_activity(lead_id, "Draft skipped", notes="DRY_RUN")
         elif safe_mode:
             print("  ⚠️  SAFE_MODE enabled: skipping Gmail draft creation")
             safe_mode_skipped += 1
+            record_activity(lead_id, "Draft skipped", notes="SAFE_MODE")
         else:
             draft_id = create_gmail_draft(demo_email, email_data)
 
