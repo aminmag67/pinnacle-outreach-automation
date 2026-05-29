@@ -894,6 +894,15 @@ def run_outreach_cycle(num_companies: int = 5, safe_mode: bool = True, dry_run: 
         # Note: only real Gmail drafts are logged to the tracking file.
         # Safe-mode/dry-run skipped actions are counted in summary metrics.
         if draft_id:
+            save_gmail_draft_record(
+                lead_id,
+                draft_id,
+                demo_email,
+                email_data.get("subject", ""),
+                email_data.get("body", ""),
+            )
+            update_lead_status(lead_id, "Draft created")
+            record_activity(lead_id, "Gmail draft created")
             print("  📊 Logging to tracking file...")
             log_to_file(email_data)
             real_gmail_drafts_created += 1
