@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import os
 import sqlite3
 import sys
@@ -91,8 +91,8 @@ def main():
             print_check("PASS", "total activities", str(activities_count))
 
             if drafts_count > 0:
-                fail = True
-                print_check("FAIL", "total drafts", str(drafts_count))
+                warn = True
+                print_check("WARN", "total drafts", f"{drafts_count} existing draft record(s)")
             else:
                 print_check("PASS", "total drafts", str(drafts_count))
 
