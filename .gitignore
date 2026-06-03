@@ -12,3 +12,6 @@ logs/
 outreach_log.jsonl
 pinnacle_crm.db
 crm_exports/
+
+pinnacle_crm_backup_*.db
+token_old_*.json
