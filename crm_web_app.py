@@ -109,6 +109,56 @@ def run_local_script(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def table_columns(table_name: str) -> set[str]:
+    """Return column names for a CRM table so optional fields can be handled safely."""
+    with connect_db(read_only=True) as conn:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+
+def clean_text(value: str | None) -> str | None:
+    """Normalize form text fields before saving to SQLite."""
+    cleaned = (value or "").strip()
+    return cleaned or None
+
+
+MANUAL_LEAD_ACTIVITY_MESSAGE = "Lead manually added from Streamlit CRM."
+
+
+def record_manual_lead_activity_if_supported(
+    conn: sqlite3.Connection,
+    lead_id: int,
+    created_at: str,
+) -> bool:
+    """Record the manual-add activity when the activities schema supports it."""
+    activity_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(activities)").fetchall()
+    }
+    required_columns = {"lead_id", "activity_type", "created_at"}
+    if not required_columns.issubset(activity_columns):
+        return False
+
+    values = {
+        "lead_id": lead_id,
+        "activity_type": "Lead manually added",
+        "created_at": created_at,
+    }
+    if "notes" in activity_columns:
+        values["notes"] = MANUAL_LEAD_ACTIVITY_MESSAGE
+    else:
+        values["activity_type"] = MANUAL_LEAD_ACTIVITY_MESSAGE
+    if "metadata_json" in activity_columns:
+        values["metadata_json"] = "{}"
+
+    columns = list(values.keys())
+    placeholders = ", ".join("?" for _ in columns)
+    column_sql = ", ".join(columns)
+    conn.execute(
+        f"INSERT INTO activities ({column_sql}) VALUES ({placeholders})",
+        tuple(values[column] for column in columns),
+    )
+    return True
+
+
 # -----------------------------
 # CRM queries
 # -----------------------------
@@ -264,9 +314,116 @@ def update_lead_status_and_followup(
         conn.commit()
 
 
+def add_manual_lead(form_data: dict[str, str | None]) -> int:
+    """Insert a manually entered lead and record an audit activity.
+
+    This write path is intentionally limited to the existing CRM `leads` and
+    `activities` tables. It never sends email, never creates Gmail drafts, and
+    never reads or writes Gmail credential files.
+    """
+    lead_columns = table_columns("leads")
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    values: dict[str, str | None] = {
+        "company_name": clean_text(form_data.get("company_name")),
+        "contact_email": clean_text(form_data.get("contact_email")),
+        "status": "New lead",
+    }
+
+    optional_values = {
+        "contact_role": clean_text(form_data.get("contact_role")),
+        "industry": clean_text(form_data.get("industry")),
+        "location": clean_text(form_data.get("location")),
+        "next_follow_up_at": clean_text(form_data.get("next_follow_up_at")),
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+    for column, value in optional_values.items():
+        if column in lead_columns:
+            values[column] = value
+
+    missing_required_columns = [
+        column for column in ("company_name", "contact_email", "status") if column not in lead_columns
+    ]
+    if missing_required_columns:
+        raise sqlite3.Error(
+            "Missing required leads column(s): " + ", ".join(missing_required_columns)
+        )
+
+    columns = list(values.keys())
+    placeholders = ", ".join("?" for _ in columns)
+    column_sql = ", ".join(columns)
+
+    with connect_db(read_only=False) as conn:
+        cursor = conn.execute(
+            f"INSERT INTO leads ({column_sql}) VALUES ({placeholders})",
+            tuple(values[column] for column in columns),
+        )
+        lead_id = int(cursor.lastrowid)
+        record_manual_lead_activity_if_supported(conn, lead_id, now_iso)
+        conn.commit()
+
+    return lead_id
+
+
 # -----------------------------
 # Streamlit pages
 # -----------------------------
+
+
+def show_add_lead() -> None:
+    st.header("Add Lead")
+    st.caption("Manually add one CRM lead. This page does not send emails or create Gmail drafts.")
+
+    try:
+        lead_columns = table_columns("leads")
+    except sqlite3.Error as exc:
+        st.error(f"Unable to inspect leads table: {exc}")
+        return
+
+    with st.form("add-lead-form", clear_on_submit=False):
+        company_name = st.text_input("company_name *")
+        contact_email = st.text_input("contact_email *")
+        contact_role = st.text_input("contact_role")
+        industry = st.text_input("industry")
+        location = st.text_input("location")
+        follow_up_date = st.date_input("next_follow_up_at", value=None)
+        submitted = st.form_submit_button("Save new lead")
+
+    if not submitted:
+        return
+
+    if not clean_text(company_name) or not clean_text(contact_email):
+        st.error("company_name and contact_email are required.")
+        return
+
+    missing_optional_columns = sorted(
+        {"contact_role", "industry", "location", "next_follow_up_at"} - lead_columns
+    )
+    if missing_optional_columns:
+        st.warning(
+            "Skipping optional field(s) missing from the leads table: "
+            + ", ".join(missing_optional_columns)
+        )
+
+    form_data = {
+        "company_name": company_name,
+        "contact_email": contact_email,
+        "contact_role": contact_role,
+        "industry": industry,
+        "location": location,
+        "next_follow_up_at": follow_up_date.isoformat() if follow_up_date else None,
+    }
+
+    try:
+        new_lead_id = add_manual_lead(form_data)
+    except sqlite3.IntegrityError as exc:
+        st.error(f"Could not add lead because the database rejected it: {exc}")
+    except sqlite3.Error as exc:
+        st.error(f"Could not add lead: {exc}")
+    else:
+        st.success(f"Lead saved successfully with id {new_lead_id}.")
 
 
 def show_dashboard() -> None:
@@ -446,6 +603,7 @@ def main() -> None:
     st.sidebar.success(message)
     page = st.sidebar.radio(
         "Page",
+        ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Review Queue", "Lead Detail", "Exports"],
     )
 
@@ -455,6 +613,8 @@ def main() -> None:
         show_review_queue()
     elif page == "Lead Detail":
         show_lead_detail()
+    elif page == "Add Lead":
+        show_add_lead()
     elif page == "Exports":
         show_exports()
 
