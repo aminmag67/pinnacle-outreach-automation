@@ -4,3 +4,5 @@ google-auth-httplib2
 google-api-python-client
 gspread
 python-dotenv
+pandas
+streamlit
