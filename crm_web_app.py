@@ -121,6 +121,44 @@ def clean_text(value: str | None) -> str | None:
     return cleaned or None
 
 
+MANUAL_LEAD_ACTIVITY_MESSAGE = "Lead manually added from Streamlit CRM."
+
+
+def record_manual_lead_activity_if_supported(
+    conn: sqlite3.Connection,
+    lead_id: int,
+    created_at: str,
+) -> bool:
+    """Record the manual-add activity when the activities schema supports it."""
+    activity_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(activities)").fetchall()
+    }
+    required_columns = {"lead_id", "activity_type", "created_at"}
+    if not required_columns.issubset(activity_columns):
+        return False
+
+    values = {
+        "lead_id": lead_id,
+        "activity_type": "Lead manually added",
+        "created_at": created_at,
+    }
+    if "notes" in activity_columns:
+        values["notes"] = MANUAL_LEAD_ACTIVITY_MESSAGE
+    else:
+        values["activity_type"] = MANUAL_LEAD_ACTIVITY_MESSAGE
+    if "metadata_json" in activity_columns:
+        values["metadata_json"] = "{}"
+
+    columns = list(values.keys())
+    placeholders = ", ".join("?" for _ in columns)
+    column_sql = ", ".join(columns)
+    conn.execute(
+        f"INSERT INTO activities ({column_sql}) VALUES ({placeholders})",
+        tuple(values[column] for column in columns),
+    )
+    return True
+
+
 # -----------------------------
 # CRM queries
 # -----------------------------
@@ -284,7 +322,7 @@ def add_manual_lead(form_data: dict[str, str | None]) -> int:
     never reads or writes Gmail credential files.
     """
     lead_columns = table_columns("leads")
-    now_iso = datetime.now().isoformat()
+    now_iso = datetime.now().isoformat(timespec="seconds")
 
     values: dict[str, str | None] = {
         "company_name": clean_text(form_data.get("company_name")),
@@ -323,19 +361,7 @@ def add_manual_lead(form_data: dict[str, str | None]) -> int:
             tuple(values[column] for column in columns),
         )
         lead_id = int(cursor.lastrowid)
-        conn.execute(
-            """
-            INSERT INTO activities (lead_id, activity_type, notes, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                lead_id,
-                "Lead manually added from Streamlit CRM.",
-                "Lead manually added from Streamlit CRM.",
-                "{}",
-                now_iso,
-            ),
-        )
+        record_manual_lead_activity_if_supported(conn, lead_id, now_iso)
         conn.commit()
 
     return lead_id
