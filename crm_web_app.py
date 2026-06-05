@@ -304,6 +304,17 @@ def drafts_for_lead_df(lead_id: int) -> pd.DataFrame:
     )
 
 
+def lead_related_counts(lead_id: int) -> dict[str, int]:
+    """Return local CRM activity and draft counts for one lead."""
+    with connect_db(read_only=True) as conn:
+        return {
+            "activities": conn.execute(
+                "SELECT COUNT(*) FROM activities WHERE lead_id = ?",
+                (lead_id,),
+            ).fetchone()[0],
+            "drafts": conn.execute(
+                "SELECT COUNT(*) FROM drafts WHERE lead_id = ?",
+                (lead_id,),
 def filtered_leads_df(filters: dict[str, str | None]) -> pd.DataFrame:
     """Return leads matching dashboard search filters."""
     clauses = []
@@ -451,6 +462,10 @@ def update_lead_status_and_followup(
 
 
 def delete_lead_crm_records(lead_id: int) -> None:
+    """Delete only local CRM rows for a lead; Gmail drafts are not deleted."""
+    with connect_db(read_only=False) as conn:
+        conn.execute("DELETE FROM activities WHERE lead_id = ?", (lead_id,))
+        conn.execute("DELETE FROM drafts WHERE lead_id = ?", (lead_id,))
     """Delete only CRM rows for one lead; Gmail drafts are not touched."""
     with connect_db(read_only=False) as conn:
         conn.execute("DELETE FROM drafts WHERE lead_id = ?", (lead_id,))
@@ -765,6 +780,31 @@ def show_lead_detail() -> None:
     st.dataframe(drafts_for_lead_df(selected_lead_id), use_container_width=True, hide_index=True)
 
     st.subheader("Danger Zone")
+    counts = lead_related_counts(selected_lead_id)
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "lead_id": selected_lead_id,
+                    "company": lead["company_name"],
+                    "email": lead["contact_email"],
+                    "activity_count": counts["activities"],
+                    "draft_count": counts["drafts"],
+                }
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.warning("This only deletes the CRM record. Gmail drafts are not deleted.")
+    delete_confirmation = st.text_input(
+        f"Type DELETE {selected_lead_id} to delete this CRM lead",
+        key=f"delete-confirm-{selected_lead_id}",
+    )
+    if st.button(
+        "Delete CRM lead",
+        key=f"delete-lead-{selected_lead_id}",
+        disabled=delete_confirmation != f"DELETE {selected_lead_id}",
     counts = related_counts(selected_lead_id)
     danger_df = pd.DataFrame(
         [
@@ -791,6 +831,9 @@ def show_lead_detail() -> None:
         try:
             delete_lead_crm_records(selected_lead_id)
         except sqlite3.Error as exc:
+            st.error(f"Could not delete CRM lead: {exc}")
+        else:
+            st.success(f"Deleted CRM lead {selected_lead_id}.")
             st.error(f"Could not delete CRM lead record: {exc}")
         else:
             st.success(f"Deleted CRM lead record {selected_lead_id}.")
@@ -843,6 +886,7 @@ def main() -> None:
     st.sidebar.success(message)
     page = st.sidebar.radio(
         "Page",
+        ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Leads", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Review Queue", "Lead Detail", "Exports"],
