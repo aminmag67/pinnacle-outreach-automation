@@ -604,6 +604,7 @@ def main() -> None:
     page = st.sidebar.radio(
         "Page",
         ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
+        ["Dashboard", "Review Queue", "Lead Detail", "Exports"],
     )
 
     if page == "Dashboard":
