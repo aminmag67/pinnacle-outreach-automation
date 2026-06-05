@@ -33,6 +33,7 @@ CREATE_DRAFT_SCRIPT = APP_DIR / "crm_create_draft_for_lead.py"
 EXPORT_SCRIPT = APP_DIR / "export_crm.py"
 
 REQUIRED_TABLES = {"leads", "activities", "drafts"}
+BLOCKED_DRAFT_STATUSES = {"Do not contact", "Won", "Lost", "Archived"}
 BLOCKED_DRAFT_STATUSES = {"Do not contact", "Won", "Lost"}
 ALLOWED_STATUSES = [
     "New lead",
@@ -46,6 +47,7 @@ ALLOWED_STATUSES = [
     "Won",
     "Lost",
     "Do not contact",
+    "Archived",
 ]
 
 
@@ -159,6 +161,40 @@ def record_manual_lead_activity_if_supported(
     return True
 
 
+def record_activity_if_supported(
+    conn: sqlite3.Connection,
+    lead_id: int,
+    activity_type: str,
+    notes: str = "",
+) -> bool:
+    """Record a lead activity when the activities table has the needed columns."""
+    activity_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(activities)").fetchall()
+    }
+    required_columns = {"lead_id", "activity_type", "created_at"}
+    if not required_columns.issubset(activity_columns):
+        return False
+
+    values = {
+        "lead_id": lead_id,
+        "activity_type": activity_type,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if "notes" in activity_columns:
+        values["notes"] = notes
+    if "metadata_json" in activity_columns:
+        values["metadata_json"] = "{}"
+
+    columns = list(values.keys())
+    placeholders = ", ".join("?" for _ in columns)
+    column_sql = ", ".join(columns)
+    conn.execute(
+        f"INSERT INTO activities ({column_sql}) VALUES ({placeholders})",
+        tuple(values[column] for column in columns),
+    )
+    return True
+
+
 # -----------------------------
 # CRM queries
 # -----------------------------
@@ -179,6 +215,7 @@ def dashboard_counts() -> dict[str, int]:
                 WHERE next_follow_up_at IS NOT NULL
                   AND TRIM(next_follow_up_at) != ''
                   AND DATE(next_follow_up_at) <= DATE(?)
+                  AND status NOT IN ('Won', 'Lost', 'Do not contact', 'Archived')
                   AND status NOT IN ('Won', 'Lost', 'Do not contact')
                 """,
                 (today_iso,),
@@ -207,6 +244,7 @@ def due_followups_df() -> pd.DataFrame:
         WHERE next_follow_up_at IS NOT NULL
           AND TRIM(next_follow_up_at) != ''
           AND DATE(next_follow_up_at) <= DATE(?)
+          AND status NOT IN ('Won', 'Lost', 'Do not contact', 'Archived')
           AND status NOT IN ('Won', 'Lost', 'Do not contact')
         ORDER BY DATE(next_follow_up_at) ASC, id ASC
         """,
@@ -265,6 +303,64 @@ def drafts_for_lead_df(lead_id: int) -> pd.DataFrame:
     )
 
 
+def filtered_leads_df(filters: dict[str, str | None]) -> pd.DataFrame:
+    """Return leads matching dashboard search filters."""
+    clauses = []
+    params: list[str] = []
+    for column in ("company_name", "contact_email", "status", "industry", "location"):
+        value = clean_text(filters.get(column))
+        if value:
+            clauses.append(f"LOWER(COALESCE({column}, '')) LIKE LOWER(?)")
+            params.append(f"%{value}%")
+
+    where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return query_df(
+        f"""
+        SELECT id, company_name, contact_email, status, industry, location,
+               next_follow_up_at, updated_at
+        FROM leads
+        {where_sql}
+        ORDER BY datetime(updated_at) DESC, id DESC
+        """,
+        tuple(params),
+    )
+
+
+def related_counts(lead_id: int) -> dict[str, int]:
+    """Return related CRM row counts for a lead."""
+    with connect_db(read_only=True) as conn:
+        return {
+            "drafts": conn.execute(
+                "SELECT COUNT(*) FROM drafts WHERE lead_id = ?", (lead_id,)
+            ).fetchone()[0],
+            "activities": conn.execute(
+                "SELECT COUNT(*) FROM activities WHERE lead_id = ?", (lead_id,)
+            ).fetchone()[0],
+        }
+
+
+def find_duplicate_lead(company_name: str, contact_email: str) -> sqlite3.Row | None:
+    """Return an existing lead that matches the submitted email or company/email pair."""
+    return fetch_one(
+        """
+        SELECT id, company_name, contact_email, status
+        FROM leads
+        WHERE LOWER(TRIM(contact_email)) = LOWER(TRIM(?))
+           OR (LOWER(TRIM(company_name)) = LOWER(TRIM(?))
+               AND LOWER(TRIM(contact_email)) = LOWER(TRIM(?)))
+        ORDER BY
+            CASE
+                WHEN LOWER(TRIM(company_name)) = LOWER(TRIM(?))
+                 AND LOWER(TRIM(contact_email)) = LOWER(TRIM(?)) THEN 0
+                ELSE 1
+            END,
+            id ASC
+        LIMIT 1
+        """,
+        (contact_email, company_name, contact_email, company_name, contact_email),
+    )
+
+
 # -----------------------------
 # Safe write actions
 # -----------------------------
@@ -272,6 +368,45 @@ def drafts_for_lead_df(lead_id: int) -> pd.DataFrame:
 
 def update_lead_status_and_followup(
     lead_id: int,
+    updates: dict[str, str | None],
+) -> None:
+    """Update editable lead fields and record one audit activity."""
+    lead_columns = table_columns("leads")
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    allowed_fields = (
+        "company_name",
+        "contact_email",
+        "contact_role",
+        "industry",
+        "location",
+        "status",
+        "next_follow_up_at",
+    )
+    values = {
+        column: clean_text(updates.get(column))
+        for column in allowed_fields
+        if column in lead_columns
+    }
+    if "status" in values and not values["status"]:
+        values["status"] = "New lead"
+    if "updated_at" in lead_columns:
+        values["updated_at"] = now_iso
+
+    if not values:
+        raise sqlite3.Error("No editable lead columns are available to update.")
+
+    set_sql = ", ".join(f"{column} = ?" for column in values)
+    with connect_db(read_only=False) as conn:
+        conn.execute(
+            f"UPDATE leads SET {set_sql} WHERE id = ?",
+            (*values.values(), lead_id),
+        )
+        record_activity_if_supported(
+            conn,
+            lead_id,
+            "Lead updated in web app",
+            "Lead updated in web app",
     old_status: str | None,
     new_status: str,
     old_next_follow_up_at: str | None,
@@ -311,6 +446,15 @@ def update_lead_status_and_followup(
                 now_iso,
             ),
         )
+        conn.commit()
+
+
+def delete_lead_crm_records(lead_id: int) -> None:
+    """Delete only CRM rows for one lead; Gmail drafts are not touched."""
+    with connect_db(read_only=False) as conn:
+        conn.execute("DELETE FROM drafts WHERE lead_id = ?", (lead_id,))
+        conn.execute("DELETE FROM activities WHERE lead_id = ?", (lead_id,))
+        conn.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
         conn.commit()
 
 
@@ -398,6 +542,14 @@ def show_add_lead() -> None:
         st.error("company_name and contact_email are required.")
         return
 
+    duplicate = find_duplicate_lead(company_name, contact_email)
+    if duplicate:
+        st.error(
+            "Duplicate lead found. "
+            f"Existing lead id: {duplicate['id']} | status: {duplicate['status']}"
+        )
+        return
+
     missing_optional_columns = sorted(
         {"contact_role", "industry", "location", "next_follow_up_at"} - lead_columns
     )
@@ -441,6 +593,24 @@ def show_dashboard() -> None:
     st.dataframe(status_df, use_container_width=True, hide_index=True)
     if not status_df.empty:
         st.bar_chart(status_df.set_index("status"))
+
+
+def show_leads_search() -> None:
+    st.header("Leads")
+    st.caption("Search and filter CRM leads without sending email or creating drafts.")
+
+    filter_cols = st.columns(5)
+    filters = {
+        "company_name": filter_cols[0].text_input("company_name"),
+        "contact_email": filter_cols[1].text_input("contact_email"),
+        "status": filter_cols[2].text_input("status"),
+        "industry": filter_cols[3].text_input("industry"),
+        "location": filter_cols[4].text_input("location"),
+    }
+
+    results = filtered_leads_df(filters)
+    st.write(f"Results: {len(results)}")
+    st.dataframe(results, use_container_width=True, hide_index=True)
 
 
 def show_review_queue() -> None:
@@ -530,6 +700,42 @@ def show_lead_detail() -> None:
 
     st.subheader("Update lead")
     current_status = lead["status"] if lead["status"] in ALLOWED_STATUSES else ALLOWED_STATUSES[0]
+    with st.form(f"edit-lead-{selected_lead_id}"):
+        edit_company_name = st.text_input("company_name", value=lead["company_name"] or "")
+        edit_contact_email = st.text_input("contact_email", value=lead["contact_email"] or "")
+        edit_contact_role = st.text_input("contact_role", value=lead["contact_role"] or "")
+        edit_industry = st.text_input("industry", value=lead["industry"] or "")
+        edit_location = st.text_input("location", value=lead["location"] or "")
+        edit_status = st.selectbox(
+            "status",
+            ALLOWED_STATUSES,
+            index=ALLOWED_STATUSES.index(current_status),
+        )
+        edit_followup = st.text_input(
+            "next_follow_up_at (YYYY-MM-DD or ISO timestamp; leave blank to clear)",
+            value=lead["next_follow_up_at"] or "",
+        )
+        save_clicked = st.form_submit_button("Save lead updates")
+
+    if save_clicked:
+        try:
+            update_lead_status_and_followup(
+                lead_id=selected_lead_id,
+                updates={
+                    "company_name": edit_company_name,
+                    "contact_email": edit_contact_email,
+                    "contact_role": edit_contact_role,
+                    "industry": edit_industry,
+                    "location": edit_location,
+                    "status": edit_status,
+                    "next_follow_up_at": edit_followup,
+                },
+            )
+        except sqlite3.Error as exc:
+            st.error(f"Could not update lead: {exc}")
+        else:
+            st.success("Lead updated and activity recorded.")
+            st.rerun()
     new_status = st.selectbox(
         "Status",
         ALLOWED_STATUSES,
@@ -556,6 +762,37 @@ def show_lead_detail() -> None:
 
     st.subheader("Drafts")
     st.dataframe(drafts_for_lead_df(selected_lead_id), use_container_width=True, hide_index=True)
+
+    st.subheader("Danger Zone")
+    counts = related_counts(selected_lead_id)
+    danger_df = pd.DataFrame(
+        [
+            {
+                "lead_id": selected_lead_id,
+                "company_name": lead["company_name"],
+                "contact_email": lead["contact_email"],
+                "related_draft_count": counts["drafts"],
+                "related_activity_count": counts["activities"],
+            }
+        ]
+    )
+    st.dataframe(danger_df, use_container_width=True, hide_index=True)
+    st.warning("This only deletes the CRM record. Gmail drafts are not deleted.")
+    confirmation_text = st.text_input(
+        f"Type DELETE {selected_lead_id} to permanently delete this CRM lead",
+        key=f"delete-confirm-{selected_lead_id}",
+    )
+    if st.button(
+        "Delete CRM lead record",
+        key=f"delete-lead-{selected_lead_id}",
+        disabled=confirmation_text != f"DELETE {selected_lead_id}",
+    ):
+        try:
+            delete_lead_crm_records(selected_lead_id)
+        except sqlite3.Error as exc:
+            st.error(f"Could not delete CRM lead record: {exc}")
+        else:
+            st.success(f"Deleted CRM lead record {selected_lead_id}.")
 
 
 def show_exports() -> None:
@@ -603,12 +840,15 @@ def main() -> None:
     st.sidebar.success(message)
     page = st.sidebar.radio(
         "Page",
+        ["Dashboard", "Leads", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
         ["Dashboard", "Review Queue", "Lead Detail", "Exports"],
     )
 
     if page == "Dashboard":
         show_dashboard()
+    elif page == "Leads":
+        show_leads_search()
     elif page == "Review Queue":
         show_review_queue()
     elif page == "Lead Detail":
