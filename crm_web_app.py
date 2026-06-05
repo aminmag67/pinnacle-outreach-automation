@@ -3,6 +3,7 @@
 
 Safety notes:
 - This app never sends email.
+- This app can delete local CRM rows only from the Lead Detail Danger Zone.
 - This app never deletes CRM data.
 - This app never reads, writes, or modifies Gmail credential files.
 - Gmail draft creation is available only after an explicit confirmation checkbox
@@ -827,6 +828,8 @@ def main() -> None:
     st.sidebar.code("pip install streamlit pandas\nstreamlit run crm_web_app.py")
     st.sidebar.header("Safety")
     st.sidebar.write("Never sends email.")
+    st.sidebar.write("Never modifies Gmail credentials.")
+    st.sidebar.write("Gmail drafts are not deleted by CRM delete.")
     st.sidebar.write("Never deletes data.")
     st.sidebar.write("Never modifies Gmail credentials.")
     st.sidebar.write("Draft creation requires confirmation and a button click.")
