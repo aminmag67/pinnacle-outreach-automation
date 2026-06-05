@@ -34,6 +34,7 @@ EXPORT_SCRIPT = APP_DIR / "export_crm.py"
 
 REQUIRED_TABLES = {"leads", "activities", "drafts"}
 BLOCKED_DRAFT_STATUSES = {"Do not contact", "Won", "Lost", "Archived"}
+BLOCKED_DRAFT_STATUSES = {"Do not contact", "Won", "Lost"}
 ALLOWED_STATUSES = [
     "New lead",
     "Draft created",
@@ -215,6 +216,7 @@ def dashboard_counts() -> dict[str, int]:
                   AND TRIM(next_follow_up_at) != ''
                   AND DATE(next_follow_up_at) <= DATE(?)
                   AND status NOT IN ('Won', 'Lost', 'Do not contact', 'Archived')
+                  AND status NOT IN ('Won', 'Lost', 'Do not contact')
                 """,
                 (today_iso,),
             ).fetchone()[0],
@@ -243,6 +245,7 @@ def due_followups_df() -> pd.DataFrame:
           AND TRIM(next_follow_up_at) != ''
           AND DATE(next_follow_up_at) <= DATE(?)
           AND status NOT IN ('Won', 'Lost', 'Do not contact', 'Archived')
+          AND status NOT IN ('Won', 'Lost', 'Do not contact')
         ORDER BY DATE(next_follow_up_at) ASC, id ASC
         """,
         (date.today().isoformat(),),
@@ -404,6 +407,44 @@ def update_lead_status_and_followup(
             lead_id,
             "Lead updated in web app",
             "Lead updated in web app",
+    old_status: str | None,
+    new_status: str,
+    old_next_follow_up_at: str | None,
+    new_next_follow_up_at: str | None,
+) -> None:
+    """Update safe lead fields and record a CRM activity.
+
+    This function never deletes data and never touches Gmail credentials. It only updates
+    status / next_follow_up_at and inserts an audit activity row.
+    """
+    now_iso = datetime.now().isoformat()
+    clean_followup = (new_next_follow_up_at or "").strip() or None
+
+    with connect_db(read_only=False) as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET status = ?, next_follow_up_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (new_status, clean_followup, now_iso, lead_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO activities (lead_id, activity_type, notes, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                lead_id,
+                "Lead updated in web app",
+                (
+                    f"old_status={old_status}; new_status={new_status}; "
+                    f"old_next_follow_up_at={old_next_follow_up_at}; "
+                    f"new_next_follow_up_at={clean_followup}"
+                ),
+                "{}",
+                now_iso,
+            ),
         )
         conn.commit()
 
@@ -695,6 +736,26 @@ def show_lead_detail() -> None:
         else:
             st.success("Lead updated and activity recorded.")
             st.rerun()
+    new_status = st.selectbox(
+        "Status",
+        ALLOWED_STATUSES,
+        index=ALLOWED_STATUSES.index(current_status),
+    )
+    new_followup = st.text_input(
+        "next_follow_up_at (YYYY-MM-DD or ISO timestamp; leave blank to clear)",
+        value=lead["next_follow_up_at"] or "",
+    )
+
+    if st.button("Save lead updates"):
+        update_lead_status_and_followup(
+            lead_id=selected_lead_id,
+            old_status=lead["status"],
+            new_status=new_status,
+            old_next_follow_up_at=lead["next_follow_up_at"],
+            new_next_follow_up_at=new_followup,
+        )
+        st.success("Lead updated and activity recorded.")
+        st.rerun()
 
     st.subheader("Activities")
     st.dataframe(activities_for_lead_df(selected_lead_id), use_container_width=True, hide_index=True)
@@ -780,6 +841,8 @@ def main() -> None:
     page = st.sidebar.radio(
         "Page",
         ["Dashboard", "Leads", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
+        ["Dashboard", "Review Queue", "Lead Detail", "Add Lead", "Exports"],
+        ["Dashboard", "Review Queue", "Lead Detail", "Exports"],
     )
 
     if page == "Dashboard":
