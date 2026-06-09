@@ -30,6 +30,15 @@ from urllib.request import Request, urlopen
 
 
 DB_FILE = Path(__file__).resolve().parent / "pinnacle_crm.db"
+SEARCH_URLS = (
+    "https://html.duckduckgo.com/html/?q={query}",
+    "https://lite.duckduckgo.com/lite/?q={query}",
+    "https://www.bing.com/search?q={query}",
+)
+USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM research)"
+REQUEST_TIMEOUT_SECONDS = 12
+QUALIFIED_SCORE = 50
+DRY_RUN_QUALIFIED_SCORE = 0
 SEARCH_URL = "https://html.duckduckgo.com/html/?q={query}"
 USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM research)"
 REQUEST_TIMEOUT_SECONDS = 12
@@ -41,6 +50,8 @@ IGNORED_HOSTS = {
     "facebook.com",
     "instagram.com",
     "linkedin.com",
+    "bing.com",
+    "microsoft.com",
     "mapquest.com",
     "yelp.com",
     "yellowpages.com",
@@ -147,6 +158,11 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Print leads without database writes")
     mode.add_argument("--apply", action="store_true", help="Insert qualified, non-duplicate leads")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print rejected candidates and rejection reasons",
+    )
     args = parser.parse_args()
     if args.limit < 1 or args.limit > 100:
         parser.error("--limit must be between 1 and 100")
@@ -257,6 +273,57 @@ def contact_page_urls(parser: PageParser, website: str) -> list[str]:
     return urls[:2]
 
 
+def search_query_patterns(industry: str, location: str) -> list[str]:
+    """Return broad search patterns so one empty result page does not stop discovery."""
+    return [
+        f"{industry} {location} contact",
+        f"{industry} {location} email",
+        f"{industry} near {location}",
+        f"site:.com {industry} {location}",
+    ]
+
+
+def debug_rejection(enabled: bool, candidate: str, reason: str) -> None:
+    if enabled:
+        print(f"DEBUG rejected: {candidate} | reason: {reason}", file=sys.stderr)
+
+
+def discover(industry: str, location: str, limit: int, debug: bool = False) -> tuple[list[Lead], int]:
+    raw_results: list[tuple[str, str]] = []
+    for query_pattern in search_query_patterns(industry, location):
+        encoded_query = quote_plus(query_pattern)
+        query_results: list[tuple[str, str]] = []
+        for search_url_template in SEARCH_URLS:
+            search_url = search_url_template.format(query=encoded_query)
+            print(f"Search URL: {search_url}")
+            try:
+                search_html = fetch_html(search_url)
+            except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+                debug_rejection(debug, search_url, f"search request failed: {exc}")
+                print("Raw result links found: 0")
+                continue
+
+            search_parser = SearchParser()
+            search_parser.feed(search_html)
+            print(f"Raw result links found: {len(search_parser.results)}")
+            query_results.extend(search_parser.results)
+            if query_results:
+                break
+        raw_results.extend(query_results)
+
+    print(f"Total raw result links found before scoring: {len(raw_results)}")
+
+    leads: list[Lead] = []
+    seen_hosts: set[str] = set()
+    for result_url, result_title in raw_results:
+        if len(leads) >= limit:
+            break
+        host = normalized_host(result_url)
+        if not host:
+            debug_rejection(debug, result_url, "missing hostname")
+            continue
+        if host in seen_hosts:
+            debug_rejection(debug, result_url, f"duplicate result host: {host}")
 def discover(industry: str, location: str, limit: int) -> list[Lead]:
     query = quote_plus(f'"{industry}" "{location}" business contact')
     search_html = fetch_html(SEARCH_URL.format(query=query))
@@ -276,6 +343,10 @@ def discover(industry: str, location: str, limit: int) -> list[Lead]:
         try:
             page_html = fetch_html(result_url)
         except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+            debug_rejection(debug, result_url, f"unable to inspect page: {exc}")
+            continue
+        if not page_html:
+            debug_rejection(debug, result_url, "page was not HTML or returned no readable HTML")
             print(f"Warning: unable to inspect {result_url}: {exc}", file=sys.stderr)
             continue
         if not page_html:
@@ -290,6 +361,8 @@ def discover(industry: str, location: str, limit: int) -> list[Lead]:
             for contact_url in contact_page_urls(page_parser, website):
                 try:
                     contact_html = fetch_html(contact_url)
+                except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+                    debug_rejection(debug, contact_url, f"unable to inspect contact page: {exc}")
                 except (HTTPError, URLError, TimeoutError, ValueError):
                     continue
                 contact_parser = PageParser()
@@ -311,6 +384,7 @@ def discover(industry: str, location: str, limit: int) -> list[Lead]:
                 fit_reason=reason,
             )
         )
+    return leads, len(raw_results)
     return leads
 
 
@@ -422,6 +496,21 @@ def main() -> int:
             require_database_ready(conn)
             dedup_keys = existing_dedup_keys(conn)
 
+            discovered, raw_result_count = discover(
+                args.industry, args.location, args.limit * 3, debug=args.debug
+            )
+            qualification_threshold = QUALIFIED_SCORE if args.apply else DRY_RUN_QUALIFIED_SCORE
+            print(f"Qualification threshold for {mode}: {qualification_threshold}")
+            qualified = []
+            for lead in discovered:
+                if lead.fit_score >= qualification_threshold:
+                    qualified.append(lead)
+                else:
+                    debug_rejection(
+                        args.debug,
+                        lead.source_url,
+                        f"fit_score={lead.fit_score} below threshold={qualification_threshold}",
+                    )
             discovered = discover(args.industry, args.location, args.limit * 3)
             qualified = [lead for lead in discovered if lead.fit_score >= QUALIFIED_SCORE]
             candidates: list[Lead] = []
@@ -429,6 +518,9 @@ def main() -> int:
             for lead in qualified:
                 if is_duplicate(lead, dedup_keys):
                     duplicate_count += 1
+                    if args.debug:
+                        print_lead(lead, "REJECTED - DUPLICATE")
+                        debug_rejection(args.debug, lead.source_url, "duplicate of CRM or run candidate")
                     print_lead(lead, "DUPLICATE - SKIPPED")
                     continue
                 candidates.append(lead)
@@ -458,6 +550,7 @@ def main() -> int:
 
     print()
     print("Safety summary")
+    print(f"- raw result links: {raw_result_count}")
     print(f"- discovered leads: {len(discovered)}")
     print(f"- qualified leads: {len(qualified)}")
     print(f"- duplicates skipped: {duplicate_count}")
