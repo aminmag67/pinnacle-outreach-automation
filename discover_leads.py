@@ -326,19 +326,6 @@ def discover(industry: str, location: str, limit: int, debug: bool = False) -> t
             continue
         if host in seen_hosts:
             debug_rejection(debug, result_url, f"duplicate result host: {host}")
-def discover(industry: str, location: str, limit: int) -> list[Lead]:
-    query = quote_plus(f'"{industry}" "{location}" business contact')
-    search_html = fetch_html(SEARCH_URL.format(query=query))
-    search_parser = SearchParser()
-    search_parser.feed(search_html)
-
-    leads: list[Lead] = []
-    seen_hosts: set[str] = set()
-    for result_url, result_title in search_parser.results:
-        if len(leads) >= limit:
-            break
-        host = normalized_host(result_url)
-        if host in seen_hosts:
             continue
         seen_hosts.add(host)
 
