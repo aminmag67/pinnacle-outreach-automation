@@ -276,10 +276,11 @@ def contact_page_urls(parser: PageParser, website: str) -> list[str]:
 def search_query_patterns(industry: str, location: str) -> list[str]:
     """Return broad search patterns so one empty result page does not stop discovery."""
     return [
+        f"{industry} {location}",
         f"{industry} {location} contact",
         f"{industry} {location} email",
         f"{industry} near {location}",
-        f"site:.com {industry} {location}",
+        f"{industry} in {location}",
     ]
 
 
@@ -291,6 +292,7 @@ def debug_rejection(enabled: bool, candidate: str, reason: str) -> None:
 def discover(industry: str, location: str, limit: int, debug: bool = False) -> tuple[list[Lead], int]:
     raw_results: list[tuple[str, str]] = []
     for query_pattern in search_query_patterns(industry, location):
+        print(f"Search query: {query_pattern}")
         encoded_query = quote_plus(query_pattern)
         query_results: list[tuple[str, str]] = []
         for search_url_template in SEARCH_URLS:
@@ -363,7 +365,6 @@ def discover(industry: str, location: str, limit: int) -> list[Lead]:
                     contact_html = fetch_html(contact_url)
                 except (HTTPError, URLError, TimeoutError, ValueError) as exc:
                     debug_rejection(debug, contact_url, f"unable to inspect contact page: {exc}")
-                except (HTTPError, URLError, TimeoutError, ValueError):
                     continue
                 contact_parser = PageParser()
                 contact_parser.feed(contact_html)
@@ -385,7 +386,6 @@ def discover(industry: str, location: str, limit: int) -> list[Lead]:
             )
         )
     return leads, len(raw_results)
-    return leads
 
 
 def require_database_ready(conn: sqlite3.Connection) -> None:
@@ -521,11 +521,11 @@ def main() -> int:
                     if args.debug:
                         print_lead(lead, "REJECTED - DUPLICATE")
                         debug_rejection(args.debug, lead.source_url, "duplicate of CRM or run candidate")
-                    print_lead(lead, "DUPLICATE - SKIPPED")
                     continue
                 candidates.append(lead)
                 add_dedup_keys(lead, dedup_keys)
-                print_lead(lead, "QUALIFIED")
+                disposition = "QUALIFIED" if args.apply else "POSSIBLE CANDIDATE"
+                print_lead(lead, disposition)
                 if len(candidates) >= args.limit:
                     break
 
