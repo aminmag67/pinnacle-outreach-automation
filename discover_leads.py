@@ -39,6 +39,10 @@ USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM resea
 REQUEST_TIMEOUT_SECONDS = 12
 QUALIFIED_SCORE = 50
 DRY_RUN_QUALIFIED_SCORE = 0
+SEARCH_URL = "https://html.duckduckgo.com/html/?q={query}"
+USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM research)"
+REQUEST_TIMEOUT_SECONDS = 12
+QUALIFIED_SCORE = 50
 REQUIRED_TABLES = {"leads", "activities"}
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 IGNORED_EMAIL_SUFFIXES = ("@example.com", "@example.org", "@example.net")
@@ -320,6 +324,19 @@ def discover(industry: str, location: str, limit: int, debug: bool = False) -> t
             continue
         if host in seen_hosts:
             debug_rejection(debug, result_url, f"duplicate result host: {host}")
+def discover(industry: str, location: str, limit: int) -> list[Lead]:
+    query = quote_plus(f'"{industry}" "{location}" business contact')
+    search_html = fetch_html(SEARCH_URL.format(query=query))
+    search_parser = SearchParser()
+    search_parser.feed(search_html)
+
+    leads: list[Lead] = []
+    seen_hosts: set[str] = set()
+    for result_url, result_title in search_parser.results:
+        if len(leads) >= limit:
+            break
+        host = normalized_host(result_url)
+        if host in seen_hosts:
             continue
         seen_hosts.add(host)
 
@@ -330,6 +347,9 @@ def discover(industry: str, location: str, limit: int, debug: bool = False) -> t
             continue
         if not page_html:
             debug_rejection(debug, result_url, "page was not HTML or returned no readable HTML")
+            print(f"Warning: unable to inspect {result_url}: {exc}", file=sys.stderr)
+            continue
+        if not page_html:
             continue
 
         page_parser = PageParser()
@@ -343,6 +363,7 @@ def discover(industry: str, location: str, limit: int, debug: bool = False) -> t
                     contact_html = fetch_html(contact_url)
                 except (HTTPError, URLError, TimeoutError, ValueError) as exc:
                     debug_rejection(debug, contact_url, f"unable to inspect contact page: {exc}")
+                except (HTTPError, URLError, TimeoutError, ValueError):
                     continue
                 contact_parser = PageParser()
                 contact_parser.feed(contact_html)
@@ -364,6 +385,7 @@ def discover(industry: str, location: str, limit: int, debug: bool = False) -> t
             )
         )
     return leads, len(raw_results)
+    return leads
 
 
 def require_database_ready(conn: sqlite3.Connection) -> None:
@@ -489,6 +511,8 @@ def main() -> int:
                         lead.source_url,
                         f"fit_score={lead.fit_score} below threshold={qualification_threshold}",
                     )
+            discovered = discover(args.industry, args.location, args.limit * 3)
+            qualified = [lead for lead in discovered if lead.fit_score >= QUALIFIED_SCORE]
             candidates: list[Lead] = []
             duplicate_count = 0
             for lead in qualified:
@@ -497,6 +521,7 @@ def main() -> int:
                     if args.debug:
                         print_lead(lead, "REJECTED - DUPLICATE")
                         debug_rejection(args.debug, lead.source_url, "duplicate of CRM or run candidate")
+                    print_lead(lead, "DUPLICATE - SKIPPED")
                     continue
                 candidates.append(lead)
                 add_dedup_keys(lead, dedup_keys)
