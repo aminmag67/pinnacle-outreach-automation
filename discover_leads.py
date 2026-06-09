@@ -39,6 +39,10 @@ USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM resea
 REQUEST_TIMEOUT_SECONDS = 12
 QUALIFIED_SCORE = 50
 DRY_RUN_QUALIFIED_SCORE = 0
+SEARCH_URL = "https://html.duckduckgo.com/html/?q={query}"
+USER_AGENT = "Mozilla/5.0 (compatible; PinnacleLeadResearch/1.0; local CRM research)"
+REQUEST_TIMEOUT_SECONDS = 12
+QUALIFIED_SCORE = 50
 REQUIRED_TABLES = {"leads", "activities"}
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 IGNORED_EMAIL_SUFFIXES = ("@example.com", "@example.org", "@example.net")
@@ -285,13 +289,7 @@ def debug_rejection(enabled: bool, candidate: str, reason: str) -> None:
         print(f"DEBUG rejected: {candidate} | reason: {reason}", file=sys.stderr)
 
 
-def discover(
-    industry: str,
-    location: str,
-    limit: int,
-    *,
-    debug: bool = False,
-) -> tuple[list[Lead], int]:
+def discover(industry: str, location: str, limit: int, debug: bool = False) -> tuple[list[Lead], int]:
     raw_results: list[tuple[str, str]] = []
     for query_pattern in search_query_patterns(industry, location):
         print(f"Search query: {query_pattern}")
@@ -338,6 +336,9 @@ def discover(
             continue
         if not page_html:
             debug_rejection(debug, result_url, "page was not HTML or returned no readable HTML")
+            print(f"Warning: unable to inspect {result_url}: {exc}", file=sys.stderr)
+            continue
+        if not page_html:
             continue
 
         page_parser = PageParser()
@@ -497,6 +498,8 @@ def main() -> int:
                         lead.source_url,
                         f"fit_score={lead.fit_score} below threshold={qualification_threshold}",
                     )
+            discovered = discover(args.industry, args.location, args.limit * 3)
+            qualified = [lead for lead in discovered if lead.fit_score >= QUALIFIED_SCORE]
             candidates: list[Lead] = []
             duplicate_count = 0
             for lead in qualified:
